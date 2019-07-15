@@ -20,6 +20,7 @@ int duration = 0;
 
 void callback(char* topic, byte* payload, unsigned int length) {
   String command = String((char*)payload);
+  Serial.printf("Message arrived [%s] %s\n", topic, command.c_str());
   DeserializationError error = deserializeJson(cmdJSON, command);
   if (error) {
     return;
@@ -31,10 +32,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
       poofState = 1;      
     }
   }
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  Serial.println(command);
 }
  
  
