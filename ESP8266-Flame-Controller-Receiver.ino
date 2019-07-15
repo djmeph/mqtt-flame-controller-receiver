@@ -1,9 +1,11 @@
+#include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include "wifi_credentials.h"
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+StaticJsonDocument<128> cmdJSON;
 
 #define HSI_INPUT D1
 #define HSI_TRIGGER D5
@@ -12,15 +14,27 @@ PubSubClient client(espClient);
 #define WIFI_LED D7
 #define MQTT_LED D8
 
+int poofState = 0;
+int expiration = 0;
+int duration = 0;
+
 void callback(char* topic, byte* payload, unsigned int length) {
+  String command = String((char*)payload);
+  DeserializationError error = deserializeJson(cmdJSON, command);
+  if (error) {
+    return;
+  }
+  String cmd = cmdJSON["cmd"];
+  if (cmd == "poof") {    
+    if (poofState != 1) {
+      duration = cmdJSON["delay"];
+      poofState = 1;      
+    }
+  }
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
-  for (int i=0; i < length; i++) {
-    char receivedChar = (char)payload[i];
-    Serial.print(receivedChar);
-  }
-  Serial.println();
+  Serial.println(command);
 }
  
  
@@ -85,8 +99,20 @@ void loop() {
     digitalWrite(HSI_TRIGGER, digitalRead(HSI_INPUT) ? LOW : HIGH);
     Serial.printf("HSI ignite %s\n", digitalRead(HSI_INPUT) ? "off" : "on");
   }
-  if (digitalRead(POOF_INPUT) == digitalRead(POOF_TRIGGER)) {
+  if (!poofState && digitalRead(POOF_INPUT) == digitalRead(POOF_TRIGGER)) {
     digitalWrite(POOF_TRIGGER, digitalRead(POOF_INPUT) ? LOW : HIGH);
     Serial.printf("Poof! %s\n", digitalRead(POOF_INPUT) ? "off" : "on");
+  }
+  if (poofState && duration && !expiration) {
+    expiration = millis() + duration;
+    duration = 0;
+    Serial.println("[REMOTE] Poof!");
+    digitalWrite(POOF_TRIGGER, HIGH);
+  }
+  if (poofState && expiration <= millis()) {
+    Serial.println("[REMOTE] fooP!");
+    digitalWrite(POOF_TRIGGER, LOW);
+    expiration = 0;    
+    poofState = 0;
   }
 }
