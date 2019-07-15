@@ -5,6 +5,7 @@
 const char* ssid = "network-ssid";      // Network SSID
 const char* password = "network-key";   // Network Key 
 const char* mqtt_server = "10.0.0.1";   // MQTT IP Address
+const int mqtt_port = 1883;             // MQTT Port
 const char* mqtt_clientId = "xxxx";     // Unique MQTT Client ID
 const char* mqtt_topic = "xxxx";        // MQTT Topic
 ```
