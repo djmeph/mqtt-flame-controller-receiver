@@ -80,7 +80,7 @@ void setup() {
   pinMode(POOF_TRIGGER, OUTPUT);
   pinMode(WIFI_LED, OUTPUT);
   pinMode(MQTT_LED, OUTPUT);
-  client.setServer(mqtt_server, 1883);
+  client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 }
 
