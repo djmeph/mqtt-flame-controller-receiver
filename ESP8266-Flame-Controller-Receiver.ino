@@ -1,6 +1,7 @@
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <elapsedMillis.h>
 #include "wifi_credentials.h"
 
 WiFiClient espClient;
@@ -14,75 +15,81 @@ StaticJsonDocument<128> cmdJSON;
 #define WIFI_LED D7
 #define MQTT_LED D8
 
-uint8_t hsi_button_state;
-int hsi_button_state_last = -1;
-int hsi_debounce = 0;
-const int hsi_debounce_time = 10;
+typedef struct poofInfo_t {
+  int state = 0;
+  int expiration = 0;
+  int duration = 0;
+};
 
-uint8_t poof_button_state;
-int poof_button_state_last = -1;
-int poof_debounce = 0;
-const int poof_debounce_time = 10;
+typedef struct buttonState_t {
+  uint8_t state = 0;
+  uint8_t stateLast = 0;
+  uint32_t debounce = 0;
+  const uint8_t debounceTime = 10;
+  char* label;
+};
 
-int poofState = 0;
-int expiration = 0;
-int duration = 0;
+poofInfo_t poofInfo;
+buttonState_t hsiButton;
+buttonState_t poofButton;
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  String command = String((char*)payload);
-  Serial.printf("Message arrived [%s] %s\n", topic, command.c_str());
-  DeserializationError error = deserializeJson(cmdJSON, command);
-  if (error) {
-    return;
-  }
-  String cmd = cmdJSON["cmd"];
-  if (cmd == "poof") {    
-    if (poofState != 1) {
-      duration = cmdJSON["delay"];
-      poofState = 1;      
-    }
-  }
-}
- 
- 
-void connectMqtt() {
-  digitalWrite(MQTT_LED, LOW);
-  while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (client.connect(mqtt_clientId)) {
-      digitalWrite(MQTT_LED, HIGH);
-      Serial.println("connected");
-      client.subscribe(mqtt_topic);
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
-    }
-  }
-}
+uint8_t wifiConnecting = 0;
+uint8_t wifiFirstConnected = 0;
 
-void setupWifi() {
-  digitalWrite(WIFI_LED, LOW);
-  delay(10);
+elapsedMillis mqttLoop = 5000;
+
+void callback(char* topic, byte* payload, uint8_t length) {
+  for (uint8_t i = 0; i < length; i++) Serial.print((char)payload[i]);
   Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid); 
-  WiFi.begin(ssid, password);
-   
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  DeserializationError error = deserializeJson(cmdJSON, payload, length);
+  if (error) return;
+  if (cmdJSON["cmd"] == "poof") {
+    if (poofInfo.state != 1) {
+      poofInfo.duration = cmdJSON["delay"];
+      poofInfo.state = 1;
+    }
   }
-  
-  digitalWrite(WIFI_LED, HIGH);
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+}
+
+void networkSetup() {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (!wifiConnecting) {
+      wifiConnecting = 1;
+      digitalWrite(WIFI_LED, LOW);
+      Serial.println("");
+      Serial.println("Connecting to WiFi ...");
+      WiFi.begin(ssid, password);
+    }
+  } else {
+    if (wifiConnecting && !wifiFirstConnected) {
+        wifiFirstConnected = 1;
+        wifiConnecting = 0;
+        digitalWrite(WIFI_LED, HIGH);
+        Serial.println("WiFi connected");
+        Serial.println("IP address: ");
+        Serial.println(WiFi.localIP()); 
+    } else if (!client.connected()) {
+      digitalWrite(MQTT_LED, LOW);
+      if (mqttLoop > 5000) {
+        mqttLoop = 0;
+        Serial.print("Attempting MQTT connection...");
+        if (client.connect(mqtt_clientId)) {
+          digitalWrite(MQTT_LED, HIGH);
+          Serial.println("connected");
+          client.subscribe(mqtt_topic);
+        } else {
+          Serial.print("failed, rc=");
+          Serial.print(client.state());
+          Serial.println(" try again in 5 seconds");
+        }
+      }
+    }
+  }
 }
 
 void setup() {
+  hsiButton.label = "HSI";
+  poofButton.label = "Poofer";
   Serial.begin(115200);
   pinMode(HSI_INPUT, INPUT_PULLUP);
   pinMode(HSI_TRIGGER, OUTPUT);
@@ -92,63 +99,47 @@ void setup() {
   pinMode(MQTT_LED, OUTPUT);
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
+  delay(10);
 }
 
-void hsiButton() {
-  hsi_button_state = digitalRead(HSI_INPUT);
-  if (hsi_button_state != hsi_button_state_last && millis() - hsi_debounce > hsi_debounce_time) {
-    hsi_button_state_last = hsi_button_state;
-    hsi_debounce = millis();
-    if (hsi_button_state == LOW) {
-      digitalWrite(HSI_TRIGGER, HIGH);
-      Serial.println("HSI ignite on");
+void buttonDebounce(buttonState_t *button, uint8_t trigger, uint8_t input) {
+  button->state = digitalRead(input);
+  if (button->state != button->stateLast && millis() - button->debounce > button->debounceTime) {
+    button->stateLast = button->state;
+    button->debounce = millis();
+    if (button->state == LOW) {
+      digitalWrite(trigger, HIGH);
+      Serial.printf("%s ignite on \n", button->label);
     } else {
-      digitalWrite(HSI_TRIGGER, LOW);
-      Serial.println("HSI ignite off");
-    }
-  }
-}
-
-void poofButton() {
-  if (poofState) return;
-  poof_button_state = digitalRead(POOF_INPUT);
-  if (poof_button_state != poof_button_state_last && millis() - poof_debounce > poof_debounce_time) {
-    poof_button_state_last = poof_button_state;
-    poof_debounce = millis();
-    if (poof_button_state == LOW) {
-      digitalWrite(POOF_TRIGGER, HIGH);
-      Serial.println("POOF ignite on");
-    } else {
-      digitalWrite(POOF_TRIGGER, LOW);
-      Serial.println("POOF ignite off");
+      digitalWrite(trigger, LOW);
+      Serial.printf("%s ignite off \n", button->label);
     }
   }
 }
 
 void waxOn() {
-  if (poofState && duration && !expiration) {
-    expiration = millis() + duration;
-    duration = 0;
+  if (poofInfo.state && poofInfo.duration && !poofInfo.expiration) {
+    poofInfo.expiration = millis() + poofInfo.duration;
+    poofInfo.duration = 0;
     Serial.println("[REMOTE] Poof!");
     digitalWrite(POOF_TRIGGER, HIGH);
   }
 }
 
 void waxOff() {
-  if (poofState && expiration <= millis()) {
+  if (poofInfo.state && poofInfo.expiration <= millis()) {
     Serial.println("[REMOTE] fooP!");
     digitalWrite(POOF_TRIGGER, LOW);
-    expiration = 0;    
-    poofState = 0;
+    poofInfo.expiration = 0;    
+    poofInfo.state = 0;
   }
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) setupWifi();
-  if (!client.connected()) connectMqtt();
+  networkSetup();
   client.loop();
-  hsiButton();
-  poofButton();
+  buttonDebounce(&hsiButton, HSI_TRIGGER, HSI_INPUT);
+  if (!poofInfo.state) buttonDebounce(&poofButton, POOF_TRIGGER, POOF_INPUT);
   waxOn();
   waxOff();
 }
